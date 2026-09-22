@@ -5,7 +5,7 @@ CONTAINER_NAME = quotes_showcase
 build:
 	$(COMPOSE) build -t $(IMAGE_NAME) .
 ## Запустить контейнер с пересборкой
-run:
+run: down
 	$(COMPOSE) run -d \
 		-p 127.0.0.1:8000:8000 \
 		-v .:/app \
@@ -15,7 +15,9 @@ run:
 		--name $(CONTAINER_NAME) \
 		$(IMAGE_NAME)
 
-
+## Тесты запускать с хоста после запуска контейнера (И ещё чуть-чуть подождать)
+test:
+	uv run pytest
 stats:
 	$(COMPOSE) stats $(CONTAINER_NAME)
 ## Остановить контейнеры
