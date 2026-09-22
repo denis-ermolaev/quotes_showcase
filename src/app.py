@@ -1,3 +1,5 @@
+import os
+from dotenv import load_dotenv
 import orjson
 import zlib
 import io
@@ -8,7 +10,9 @@ import asyncio
 from pydantic import BaseModel, Field
 from fastapi import FastAPI, HTTPException, Request
 
-app = FastAPI(root_path="/proxy/8000/")
+load_dotenv()
+
+app = FastAPI(root_path=os.getenv("ROOT_PATH", "/"))
 
 
 catalog = {"quotes": {}}
