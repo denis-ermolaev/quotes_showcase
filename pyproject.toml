@@ -1,0 +1,33 @@
+[project]
+name = "quotes_showcase"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+  "fastapi>=0.141.1",
+  "httpx>=0.28.1",
+  "objsize>=0.8.0",
+  "orjson>=3.12.0",
+  "pydantic>=2.13.5",
+  "pytest>=9.1.1",
+  "pytest-asyncio>=1.4.0",
+  "uvicorn[standard]>=0.53.0",
+]
+
+# Pytest
+[tool.pytest.ini_options]
+addopts = [
+  "-s",
+  "-p no:cacheprovider",
+]
+norecursedirs = [
+  ".venv",
+]
+# Имена файлов с тестами: 001_simple_test.py
+python_files = [
+  "test.py",
+]
+# Искать тесты в папке
+testpaths = ["src/"]
+asyncio_mode = "auto"
