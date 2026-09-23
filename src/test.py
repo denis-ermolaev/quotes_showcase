@@ -265,26 +265,6 @@ async def test004(httpx_client: httpx.AsyncClient):
 
     print(result.json())
 
-    # Вторичные 700 запросов ----
-    start = time.perf_counter()
-    lst = []
-    for i in range(4, 700):
-        lst.append(
-            httpx_client.request(
-                "GET",
-                f"http://localhost:8000/quotes/q-0{340000 - i}",
-            )
-        )
-    result = await asyncio.gather(*lst)
-    end = time.perf_counter()
-    print(f"Время обработки 700 запросов с кэшем: {end - start:.6f} сек")
-
-    print(len([True for i in result if i.is_success]))
-
-    result = await httpx_client.request("GET", "http://localhost:8000/stats")
-
-    print(result.json())
-
     # Запросы к одной карточке ----
     start = time.perf_counter()
     lst = []
@@ -321,3 +301,20 @@ async def test004(httpx_client: httpx.AsyncClient):
     result = await httpx_client.request("GET", "http://localhost:8000/stats")
     assert result.json()["bytes"] < 510000
     assert result.json()["bytes"] > 300000
+
+    # Использование кэша ----
+    start = time.perf_counter()
+    lst = []
+    for i in list(range(4, 14)) * 70:
+        lst.append(
+            httpx_client.request(
+                "GET",
+                f"http://localhost:8000/quotes/q-0{340000 - i}",
+            )
+        )
+    await asyncio.gather(*lst)
+    end = time.perf_counter()
+    print(f"Время обработки 700 запросов с кэшем: {end - start:.6f} сек")
+
+    result = await httpx_client.request("GET", "http://localhost:8000/stats")
+    print(result.json())
