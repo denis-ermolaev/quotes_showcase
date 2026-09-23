@@ -1,3 +1,4 @@
+import time
 from httpx import RemoteProtocolError
 from time import sleep
 import subprocess
@@ -28,10 +29,11 @@ async def big_quotes_is_exsit():
 
 @pytest.fixture(autouse=True, scope="session")
 async def prepare_container_for_test():
+    """Подготовка контейнеров для тестов, проверяет готовность, иначе ошибка, в конце останавливает контейнер."""
     subprocess.run("make run", shell=True)
     is_success = False
     async with httpx.AsyncClient(trust_env=False) as httpx_client:
-        for _ in range(0, 20):
+        for _ in range(0, 30):
             try:
                 result = await httpx_client.request(
                     "GET", "http://localhost:8000/health"
@@ -42,14 +44,13 @@ async def prepare_container_for_test():
                 sleep(1)
             except RemoteProtocolError:
                 sleep(1)
-    if is_success:
-        yield True
-        subprocess.run("make log", shell=True)
-        subprocess.run("make down", shell=True)
-    else:
+    if not is_success:
         subprocess.run("make log", shell=True)
         subprocess.run("make down", shell=True)
         raise AttributeError("Проблемы со стартом контейнера")
+    yield True
+    subprocess.run("make log", shell=True)
+    subprocess.run("make down", shell=True)
 
 
 async def test001(httpx_client: httpx.AsyncClient):
@@ -212,14 +213,40 @@ async def test004(httpx_client: httpx.AsyncClient):
     """Стресс-тест всего API."""
 
     # Тяжёлый импорт 340к цитат 110+- мб ----
+    start = time.perf_counter()
     with open("big_quotes.json", "r") as f:
         result = await httpx_client.request(
             "POST", "http://localhost:8000/import", content=f.read()
         )
         assert result.is_success
         assert result.json() == {"imported": 340000, "dropped": 0}
+    end = time.perf_counter()
+    print(f"Ипорт занял: {end - start:.6f} сек")
+
+    # Повторный импорт 340к цитат 110+- мб ----
+    start = time.perf_counter()
+    with open("big_quotes.json", "r") as f:
+        result = await httpx_client.request(
+            "POST", "http://localhost:8000/import", content=f.read()
+        )
+        assert result.is_success
+        assert result.json() == {"imported": 340000, "dropped": 0}
+    end = time.perf_counter()
+    print(f"Второй Ипорт занял: {end - start:.6f} сек")
+
+    # Повторный импорт 340к цитат 110+- мб ----
+    start = time.perf_counter()
+    with open("big_quotes.json", "r") as f:
+        result = await httpx_client.request(
+            "POST", "http://localhost:8000/import", content=f.read()
+        )
+        assert result.is_success
+        assert result.json() == {"imported": 340000, "dropped": 0}
+    end = time.perf_counter()
+    print(f"Третий Ипорт занял: {end - start:.6f} сек")
 
     # Первичные 700 запросов ----
+    start = time.perf_counter()
     lst = []
     for i in range(4, 700):
         lst.append(
@@ -229,10 +256,17 @@ async def test004(httpx_client: httpx.AsyncClient):
             )
         )
     result = await asyncio.gather(*lst)
+    end = time.perf_counter()
+    print(f"Время обработки 700 запросов без кэша: {end - start:.6f} сек")
 
     print(len([True for i in result if i.is_success]))
+
+    result = await httpx_client.request("GET", "http://localhost:8000/stats")
+
+    print(result.json())
 
     # Вторичные 700 запросов ----
+    start = time.perf_counter()
     lst = []
     for i in range(4, 700):
         lst.append(
@@ -242,10 +276,17 @@ async def test004(httpx_client: httpx.AsyncClient):
             )
         )
     result = await asyncio.gather(*lst)
+    end = time.perf_counter()
+    print(f"Время обработки 700 запросов с кэшем: {end - start:.6f} сек")
 
     print(len([True for i in result if i.is_success]))
 
+    result = await httpx_client.request("GET", "http://localhost:8000/stats")
+
+    print(result.json())
+
     # Запросы к одной карточке ----
+    start = time.perf_counter()
     lst = []
     for _ in range(4, 500):
         lst.append(
@@ -255,11 +296,16 @@ async def test004(httpx_client: httpx.AsyncClient):
             )
         )
     await asyncio.gather(*lst)
+    end = time.perf_counter()
+
+    print(f"Время обработки 500 запросов к одной карточке: {end - start:.6f} сек")
 
     result = await httpx_client.request("GET", "http://localhost:8000/stats")
 
     print(result.json())
 
+    # Проверка кэша ----
+    start = time.perf_counter()
     for i in batched(range(0, 1500), n=500):
         lst = []
         for j in i:
@@ -270,6 +316,8 @@ async def test004(httpx_client: httpx.AsyncClient):
                 )
             )
         await asyncio.gather(*lst)
+    end = time.perf_counter()
+    print(f"Время обработки 1500 запросов к разным карточкам: {end - start:.6f} сек")
     result = await httpx_client.request("GET", "http://localhost:8000/stats")
     assert result.json()["bytes"] < 510000
     assert result.json()["bytes"] > 300000

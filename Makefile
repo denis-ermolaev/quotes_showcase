@@ -2,6 +2,7 @@ COMPOSE := docker
 IMAGE_NAME = quotes_showcase
 CONTAINER_NAME = quotes_showcase
 
+## Собрать контейнер из Dockerfile
 build:
 	$(COMPOSE) build -t $(IMAGE_NAME) .
 ## Запустить контейнер с пересборкой
@@ -18,12 +19,14 @@ run: down
 ## Тесты запускать с хоста после запуска контейнера (И ещё чуть-чуть подождать)
 test:
 	uv run pytest
+## Статистика контейнера
 stats:
 	$(COMPOSE) stats $(CONTAINER_NAME)
+
 ## Остановить контейнеры
 down:
 	$(COMPOSE) rm -f $(CONTAINER_NAME)
 
-
+## Получить логи из контейнера
 log:
-	$(COMPOSE) logs --tail 1000 $(CONTAINER_NAME) > tail.log
+	$(COMPOSE) logs --tail 1000 $(CONTAINER_NAME) > tail.log 2>&1

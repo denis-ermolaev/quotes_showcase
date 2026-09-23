@@ -1,7 +1,6 @@
 import os
 from dotenv import load_dotenv
 import orjson
-import zlib
 import io
 import objsize
 from fastapi.encoders import jsonable_encoder
@@ -9,6 +8,7 @@ from fastapi.responses import JSONResponse
 import asyncio
 from pydantic import BaseModel, Field
 from fastapi import FastAPI, HTTPException, Request
+from compression import zstd
 
 load_dotenv()
 
@@ -33,7 +33,7 @@ summary = {
 
 def maybe_compress(text: str | bytes) -> str | bytes:
     """Сжать, если это будет выгодно."""
-    MIN_COMPRESS_LEN = 150  # 200  # 512  # ниже этого zlib почти всегда проигрывает
+    MIN_COMPRESS_LEN = 150  # На маленьких текстах сжатие может не дать преимущества
     if isinstance(text, bytes):
         raw = text
     else:
@@ -42,10 +42,9 @@ def maybe_compress(text: str | bytes) -> str | bytes:
     if len(raw) < MIN_COMPRESS_LEN:
         return text  # оставляем как есть
 
-    compressed = zlib.compress(raw, level=1)  # 6
+    compressed = zstd.compress(raw, level=1)
     if len(compressed) >= len(raw):
         return text  # сжатие не дало выигрыша
-
     return compressed
 
 
@@ -70,7 +69,7 @@ def maybe_decompress(value: str | bytes) -> str:
     """Декордировать value, если оно было сжато."""
     if isinstance(value, str):
         return value  # не сжато
-    return zlib.decompress(value).decode("utf-8")
+    return zstd.decompress(value).decode("utf-8")
 
 
 def get_dict(q: str | bytes):
@@ -97,7 +96,6 @@ async def delete_from_cahe(id):
 
 
 _inflight: dict[str, asyncio.Future] = {}
-_inflight_lock = asyncio.Lock()
 
 
 async def get_quote_by_id(id) -> tuple | None:
@@ -105,48 +103,50 @@ async def get_quote_by_id(id) -> tuple | None:
     # 1. Кэш?
     if n := cache["quotes"].get(id):
         summary["hits"] += 1
-        return get_dict(n), True
+        return n, True  # Для быстрого доступа храним без сжатия
 
     # 2. Метрики
     summary["misses"] += 1
 
     # 3. Single-flight: кто-то уже грузит?
-    async with _inflight_lock:
-        fut = _inflight.get(id)
-        if fut is None:
-            fut = asyncio.get_event_loop().create_future()
-            _inflight[id] = fut
-            i_am_leader = True
+    async with asyncio.Lock():
+        future = _inflight.get(id)
+        if future is None:
+            future = asyncio.get_event_loop().create_future()
+            # future.add_done_callback(lambda _: _inflight.pop(id, None))
+            _inflight[id] = future
+            first = True
         else:
-            i_am_leader = False
+            first = False
 
-    # 4. Не лидер — жду результат лидера
-    if not i_am_leader:
-        return await fut, False
+    # 4. Не первый — жду результат
+    if not first:
+        return await future, False
 
-    # 5. Лидер — иду в каталог
+    # 5. Первый — иду в каталог
     try:
         summary["loads"] += 1
         await asyncio.sleep(0.3)
 
-        n = catalog["quotes"].get(id)
+        n = catalog["quotes"].get(id)  # Зашифрованная
         if n is None:
-            fut.set_result(None)
+            future.set_result(None)
             return None
-        result = get_dict(n)
+        result = get_dict(n)  # Как при валидации через Quotes
         if objsize.get_deep_size(cache["quotes"]) < 512000:
-            print(f"{objsize.get_deep_size(cache["quotes"]) = }")
-            cache["quotes"].update({id: prepare_dict(result, compress=False)})
+            cache["quotes"].update(
+                {id: result}
+            )  # Для быстрого доступа храним без сжатия
             asyncio.create_task(delete_from_cahe(id))
 
-        fut.set_result(result)
+        future.set_result(result)
+        async with asyncio.Lock():
+            # Удаление Future - обещания из словаря с ними
+            _inflight.pop(id, None)
         return result, False
     except Exception as e:
-        fut.set_exception(e)
+        future.set_exception(e)
         raise
-    finally:
-        async with _inflight_lock:
-            _inflight.pop(id, None)
 
 
 async def put_quote_by_id(id, quotes):
@@ -177,15 +177,15 @@ async def delete_by_id(id):
         return False
 
 
-# Не асинхронный эндпоинт, чтобы при блокировки event loop
-# Запускался в другом потоке
 @app.get("/health", status_code=200)
 async def get_health():
+    """Эндпоинт для проверки работы API."""
     return {"status": "healthy"}
 
 
 @app.get("/stats", status_code=200)
 async def get_stats():
+    """Эндпоинт для получения статистики по работе API."""
     # Метрики #
     summary["size"] = len(cache["quotes"])
     summary["bytes"] = objsize.get_deep_size(cache["quotes"])
@@ -194,6 +194,8 @@ async def get_stats():
 
 
 class Quotes(BaseModel):
+    """Модель для валидации цитат."""
+
     id: str | None = None
     author: str = Field(..., min_length=1, max_length=200)
     text: str | bytes = Field(..., min_length=1, max_length=16384)
@@ -228,6 +230,8 @@ raw_str = """{"quotes": [
     },
 )
 async def post_import(request: Request):
+    """Эндпоинт для импорта цитат в каталог API."""
+
     def read_buffer(buffer: bytes) -> list[dict] | None:
         nonlocal old_buffer
         # print(f"run {old_buffer = }, {buffer = }")
@@ -283,12 +287,14 @@ async def post_import(request: Request):
 
 @app.put("/catalog/{quote_id}", status_code=200)
 async def put_catalog(quote_id: str, quotes: Quotes):
+    """Эндпоинт для добавления или изменения цитаты в каталоге."""
     new_value = await put_quote_by_id(quote_id, quotes.model_dump())
     return new_value
 
 
 @app.delete("/catalog/{quote_id}", status_code=200)
 async def delete_catalog(quote_id: str):
+    """Эндпоинт для удаления цитаты из каталога."""
     result = await delete_by_id(quote_id)
     if not result:
         raise HTTPException(404, detail="not found")
@@ -297,6 +303,7 @@ async def delete_catalog(quote_id: str):
 
 @app.get("/quotes/{quote_id}", status_code=200)
 async def get_quotes(quote_id: str):
+    """Эндпоинт для получения цитаты из каталога."""
     if (n := await get_quote_by_id(quote_id)) is None:
         raise HTTPException(404, detail="not found")
     # --- #

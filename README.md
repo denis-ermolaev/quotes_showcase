@@ -12,6 +12,9 @@
 - **Зависимости** — внешних БД и кэшей нет, всё состояние в памяти процесса.
 - **Ограничения** — 340 000 записей (~107 МБ) укладываются в лимит 256 МБ.
 
+DEV:
+> http://192.168.137.2:8080/proxy/8000/docs
+
 ## Контекст
 
 «Цитатник» — сервис, где люди читают цитаты известных людей, делятся ссылками
@@ -26,34 +29,6 @@
 новый снимок и продолжает обслуживать читателей.
 
 Вам нужно написать эту витрину.
-
-http://192.168.137.2:8080/proxy/8000/docs
-
-Данные для проверки
-```bash
-curl -X POST http://localhost:8000/import \
-  -H "Content-Type: application/json" \
-  --data-binary @big_quotes.json \
-  --noproxy "*" \
-  -w "\nHTTP %{http_code}, time: %{time_total}s, size: %{size_upload} bytes\n"
-
-
-
-for i in $(seq 1 300); do
-  curl -s -o /dev/null --noproxy "*" http://localhost:8000/quotes/q-0000004 &
-done
-wait
-
-curl -s --noproxy "*" http://localhost:8000/stats
-```
-
-```text
-{"quotes": [
-  {"id": "q-0000004", "author": "Марк Аврелий1", "text": "587gjmghj,", "tags": ["стоицизм"], "year": 170, "lang": "ru"},
-  {"id": "q-0000005", "author": "Марк Аврелий2", "text": "fghmgf5363", "tags": ["стоицизм"], "year": 170, "lang": "ru"},
-  {"id": "q-0000006", "author": "Марк Аврелий3", "text": "fdgndfhn", "tags": ["стоицизм"], "year": 170, "lang": "ru"}
-]}
-```
 
 ## Использование нейросетей — разрешено
 
