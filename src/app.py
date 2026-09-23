@@ -49,7 +49,7 @@ def maybe_compress(text: str | bytes) -> str | bytes:
     return compressed
 
 
-def prepare_dict(q):
+def prepare_dict(q, compress: bool = True):
     """Подготовить данные к отправки в каталог или кэш."""
     row = orjson.dumps(
         [
@@ -63,7 +63,7 @@ def prepare_dict(q):
         # ensure_ascii=False,
         # separators=(",", ":"),
     ).decode()
-    return maybe_compress(row)
+    return maybe_compress(row) if compress else row
 
 
 def maybe_decompress(value: str | bytes) -> str:
@@ -133,13 +133,12 @@ async def get_quote_by_id(id) -> tuple | None:
         if n is None:
             fut.set_result(None)
             return None
-
+        result = get_dict(n)
         if objsize.get_deep_size(cache["quotes"]) < 512000:
             print(f"{objsize.get_deep_size(cache["quotes"]) = }")
-            cache["quotes"].update({id: n})
+            cache["quotes"].update({id: prepare_dict(result, compress=False)})
             asyncio.create_task(delete_from_cahe(id))
 
-        result = get_dict(n)
         fut.set_result(result)
         return result, False
     except Exception as e:

@@ -23,3 +23,7 @@ stats:
 ## Остановить контейнеры
 down:
 	$(COMPOSE) rm -f $(CONTAINER_NAME)
+
+
+log:
+	$(COMPOSE) logs --tail 1000 $(CONTAINER_NAME) > tail.log

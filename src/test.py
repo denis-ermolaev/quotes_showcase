@@ -1,3 +1,7 @@
+from httpx import RemoteProtocolError
+from time import sleep
+import subprocess
+from itertools import batched
 from pathlib import Path
 import asyncio
 import pytest
@@ -20,6 +24,32 @@ async def big_quotes_is_exsit():
     """Проверка документа для импорта."""
     if not Path("big_quotes.json").exists():
         big_quotes_creator()
+
+
+@pytest.fixture(autouse=True, scope="session")
+async def prepare_container_for_test():
+    subprocess.run("make run", shell=True)
+    is_success = False
+    async with httpx.AsyncClient(trust_env=False) as httpx_client:
+        for _ in range(0, 20):
+            try:
+                result = await httpx_client.request(
+                    "GET", "http://localhost:8000/health"
+                )
+                if result.is_success:
+                    is_success = True
+                    break
+                sleep(1)
+            except RemoteProtocolError:
+                sleep(1)
+    if is_success:
+        yield True
+        subprocess.run("make log", shell=True)
+        subprocess.run("make down", shell=True)
+    else:
+        subprocess.run("make log", shell=True)
+        subprocess.run("make down", shell=True)
+        raise AttributeError("Проблемы со стартом контейнера")
 
 
 async def test001(httpx_client: httpx.AsyncClient):
@@ -57,6 +87,8 @@ async def test003(httpx_client: httpx.AsyncClient):
         )
         assert result.is_success
         assert result.json() == {"imported": 3, "dropped": 0}
+    result = await httpx_client.request("GET", "http://localhost:8000/stats")
+    assert result.json().get("catalog") == 3
 
     # Первичное получение цитат ----
     lst = []
@@ -75,11 +107,13 @@ async def test003(httpx_client: httpx.AsyncClient):
             i.json().keys()
             == {"id": 0, "author": 0, "text": 0, "tags": 0, "year": 0, "lang": 0}.keys()
         )
+        assert i.headers["x-cache"] == "MISS"
     result = await httpx_client.request("GET", "http://localhost:8000/stats")
 
     print(result.json())
 
     assert result.json().get("loads") == 3
+    assert result.json().get("size") == 3
 
     # Удаление ----
     result = await httpx_client.request(
@@ -137,7 +171,9 @@ async def test003(httpx_client: httpx.AsyncClient):
     print(result.json())
 
     assert result.json().get("loads") == 6
-    assert result.json().get("misses") == 6  # Ни одной заметки не было в кэше
+    assert (
+        result.json().get("misses") == 6
+    )  # Ни одной заметки не было в кэше, т.к они новые
 
     result = await httpx_client.request(
         "GET",
@@ -156,16 +192,20 @@ async def test003(httpx_client: httpx.AsyncClient):
         "http://localhost:8000/quotes/q-0000015",
     )
     assert result.is_success
+    assert result.headers["x-cache"] == "MISS"
     result = await httpx_client.request(
         "GET",
         "http://localhost:8000/quotes/q-0000015",
     )
     assert result.is_success
+    assert result.headers["x-cache"] == "HIT"
 
     result = await httpx_client.request("GET", "http://localhost:8000/stats")
 
     assert result.json().get("hits") == 2
     assert result.json().get("misses") == 7
+
+    print(result.json())
 
 
 async def test004(httpx_client: httpx.AsyncClient):
@@ -204,13 +244,6 @@ async def test004(httpx_client: httpx.AsyncClient):
     result = await asyncio.gather(*lst)
 
     print(len([True for i in result if i.is_success]))
-    # for i in result:
-    #     i: httpx.Response = i
-    #     assert i.is_success
-    #     assert (
-    #         i.json().keys()
-    #         == {"id": 0, "author": 0, "text": 0, "tags": 0, "year": 0, "lang": 0}.keys()
-    #     )
 
     # Запросы к одной карточке ----
     lst = []
@@ -226,3 +259,17 @@ async def test004(httpx_client: httpx.AsyncClient):
     result = await httpx_client.request("GET", "http://localhost:8000/stats")
 
     print(result.json())
+
+    for i in batched(range(0, 1500), n=500):
+        lst = []
+        for j in i:
+            lst.append(
+                httpx_client.request(
+                    "GET",
+                    f"http://localhost:8000/quotes/q-0{240020 - j}",
+                )
+            )
+        await asyncio.gather(*lst)
+    result = await httpx_client.request("GET", "http://localhost:8000/stats")
+    assert result.json()["bytes"] < 510000
+    assert result.json()["bytes"] > 300000
