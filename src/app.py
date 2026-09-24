@@ -1,3 +1,4 @@
+from cachetools import LFUCache
 import os
 from dotenv import load_dotenv
 import orjson
@@ -15,9 +16,35 @@ load_dotenv()
 app = FastAPI(root_path=os.getenv("ROOT_PATH", "/"))
 
 
+class LFUTTLCacheByte:
+    def __init__(self):
+        self.cache = LFUCache(maxsize=1_000_000_000)
+        self.LIMIT = 512_000
+
+    def size_of_cache(self):
+        return objsize.get_deep_size(self.cache)
+
+    def get(self, key):
+        return self.cache.get(key)
+
+    def pop(self, key):
+        return self.cache.pop(key)
+
+    def __setitem__(self, key, value):
+        size = self.size_of_cache()
+        size_object = objsize.get_deep_size(value)
+        if size + size_object < self.LIMIT:
+            self.cache[key] = value
+        else:
+            while size + size_object > self.LIMIT:
+                size = self.size_of_cache()
+                self.cache.popitem()
+            self.cache[key] = value
+
+
 catalog = {"quotes": {}}
 
-cache = {"quotes": {}}
+cache = {"quotes": LFUTTLCacheByte()}
 
 
 summary = {
@@ -89,7 +116,7 @@ async def delete_from_cahe(id):
     """Удаление готовой карточки (удаление из кэша)."""
     await asyncio.sleep(15)
     if cache["quotes"].get(id):
-        del cache["quotes"][id]
+        cache["quotes"].pop(id)
         # Метрики #
         summary["evictions"] += 1
         # --- #
@@ -133,11 +160,9 @@ async def get_quote_by_id(id) -> tuple | None:
             future.set_result(None)
             return None
         result = get_dict(n)  # Как при валидации через Quotes
-        if objsize.get_deep_size(cache["quotes"]) < 512000:
-            cache["quotes"].update(
-                {id: result}
-            )  # Для быстрого доступа храним без сжатия
-            asyncio.create_task(delete_from_cahe(id))
+
+        cache["quotes"][id] = result  # Для быстрого доступа храним без сжатия
+        asyncio.create_task(delete_from_cahe(id))
 
         future.set_result(result)
         async with asyncio.Lock():
@@ -158,7 +183,7 @@ async def put_quote_by_id(id, quotes):
     new_value = prepare_dict({"id": id, **quotes})
     catalog["quotes"][id] = new_value
     if cache["quotes"].get(id):
-        del cache["quotes"][id]
+        cache["quotes"].pop(id)
     return new_value
 
 
@@ -171,7 +196,7 @@ async def delete_by_id(id):
     if catalog["quotes"].get(id):
         del catalog["quotes"][id]
         if cache["quotes"].get(id):
-            del cache["quotes"][id]
+            cache["quotes"].pop(id)
         return True
     else:
         return False
@@ -187,7 +212,7 @@ async def get_health():
 async def get_stats():
     """Эндпоинт для получения статистики по работе API."""
     # Метрики #
-    summary["size"] = len(cache["quotes"])
+    summary["size"] = int(cache["quotes"].cache.currsize)
     summary["bytes"] = objsize.get_deep_size(cache["quotes"])
     # --- #
     return summary
