@@ -1,3 +1,4 @@
+import math
 from cachetools import LFUCache
 import os
 from dotenv import load_dotenv
@@ -17,29 +18,42 @@ app = FastAPI(root_path=os.getenv("ROOT_PATH", "/"))
 
 
 class LFUTTLCacheByte:
-    def __init__(self):
-        self.cache = LFUCache(maxsize=1_000_000_000)
-        self.LIMIT = 512_000
+    def __init__(self, bytes_limit: int = 512_000):
+        self.cache = LFUCache(maxsize=math.inf)
+        self.BYTES_LIMIT = bytes_limit
+        self.bytes_size = 0
 
-    def size_of_cache(self):
-        return objsize.get_deep_size(self.cache)
+    @staticmethod
+    def get_bytes_size(value):
+        return objsize.get_deep_size(value)
 
     def get(self, key):
         return self.cache.get(key)
 
+    def add_bytes_size(self, value):
+        self.bytes_size += self.get_bytes_size(value)
+
+    def remove_bytes_size(self, value):
+        self.bytes_size -= self.get_bytes_size(value)
+
     def pop(self, key):
-        return self.cache.pop(key)
+        pop_value = self.cache.pop(key)
+        self.remove_bytes_size(pop_value)
+        return pop_value
 
     def __setitem__(self, key, value):
-        size = self.size_of_cache()
-        size_object = objsize.get_deep_size(value)
-        if size + size_object < self.LIMIT:
+        size_object = self.get_bytes_size(value)
+        if size_object > self.BYTES_LIMIT:
+            print("Элемент слишком большой для кэша")
+            return False
+        if self.bytes_size + size_object < self.BYTES_LIMIT:
             self.cache[key] = value
         else:
-            while size + size_object > self.LIMIT:
-                size = self.size_of_cache()
-                self.cache.popitem()
+            while self.bytes_size + size_object > self.BYTES_LIMIT:
+                _, pop_value = self.cache.popitem()
+                self.remove_bytes_size(pop_value)
             self.cache[key] = value
+        self.add_bytes_size(value)
 
 
 catalog = {"quotes": {}}
@@ -213,7 +227,7 @@ async def get_stats():
     """Эндпоинт для получения статистики по работе API."""
     # Метрики #
     summary["size"] = int(cache["quotes"].cache.currsize)
-    summary["bytes"] = objsize.get_deep_size(cache["quotes"])
+    summary["bytes"] = cache["quotes"].bytes_size
     # --- #
     return summary
 

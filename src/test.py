@@ -299,8 +299,8 @@ async def test004(httpx_client: httpx.AsyncClient):
     end = time.perf_counter()
     print(f"Время обработки 1500 запросов к разным карточкам: {end - start:.6f} сек")
     result = await httpx_client.request("GET", "http://localhost:8000/stats")
-    assert result.json()["bytes"] < 510000
-    assert result.json()["bytes"] > 300000
+    assert result.json()["bytes"] < 512_000
+    assert result.json()["bytes"] > 300_000
 
     # Использование кэша ----
     start = time.perf_counter()
