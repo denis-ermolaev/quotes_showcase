@@ -83,7 +83,7 @@ def maybe_compress(text: str | bytes) -> str | bytes:
     if len(raw) < MIN_COMPRESS_LEN:
         return text  # оставляем как есть
 
-    compressed = zstd.compress(raw, level=1)
+    compressed = zstd.compress(raw, level=-5)
     if len(compressed) >= len(raw):
         return text  # сжатие не дало выигрыша
     return compressed
@@ -136,6 +136,7 @@ async def delete_from_cahe(id):
         # --- #
 
 
+_inflight_lock = asyncio.Lock()
 _inflight: dict[str, asyncio.Future] = {}
 
 
@@ -150,7 +151,7 @@ async def get_quote_by_id(id) -> tuple | None:
     summary["misses"] += 1
 
     # 3. Single-flight: кто-то уже грузит?
-    async with asyncio.Lock():
+    async with _inflight_lock:
         future = _inflight.get(id)
         if future is None:
             future = asyncio.get_event_loop().create_future()
@@ -178,14 +179,18 @@ async def get_quote_by_id(id) -> tuple | None:
         cache["quotes"][id] = result  # Для быстрого доступа храним без сжатия
         asyncio.create_task(delete_from_cahe(id))
 
-        future.set_result(result)
-        async with asyncio.Lock():
+        async with _inflight_lock:
             # Удаление Future - обещания из словаря с ними
             _inflight.pop(id, None)
+        future.set_result(result)
+
         return result, False
     except Exception as e:
         future.set_exception(e)
         raise
+    finally:
+        async with _inflight_lock:
+            _inflight.pop(id, None)
 
 
 async def put_quote_by_id(id, quotes):
